@@ -6,21 +6,25 @@ using UnityEngine;
 
 public class LocalInputPoller : NetworkBehaviour, INetworkRunnerCallbacks
 {
+    // 플레이어 컨트롤러 참조
     [SerializeField] private PlayerController player;
 
+    // 네트워크 오브젝트 생성 시 초기화
     public override void Spawned()
     {
+        // 로컬 플레이어인 경우에만 입력 콜백 등록
         if (Runner.LocalPlayer == Object.InputAuthority)
         {
             Runner.AddCallbacks(this);
         }
     }
 
-    //Only if local we get input callback, no need to check
+    // 입력 폴링 - 로컬 입력을 네트워크로 전송
     public void OnInput(NetworkRunner runner, NetworkInput input)
     {
         if (runner != null && runner.IsRunning)
         {
+            // 플레이어의 현재 입력 상태를 가져와서 네트워크에 전송
             var data = player.GetPlayerNetworkInput();
             input.Set(data);
         }

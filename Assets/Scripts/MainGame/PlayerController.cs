@@ -4,35 +4,39 @@ using UnityEngine;
 
 public class PlayerController : NetworkBehaviour, IBeforeUpdate
 {
+    // 플레이어 입력 허용 조건 체크
     public bool AcceptAnyInput => PlayerIsAlive && !GameManager.MatchIsOver && !playerChatController.IsTyping;
-    
+
+    // 컴포넌트 참조
     [SerializeField] private PlayerChatController playerChatController;
     [SerializeField] private TextMeshProUGUI playerNameText;
     [SerializeField] private GameObject cam;
     [SerializeField] private float moveSpeed = 6;
     [SerializeField] private float jumpForce = 1000;
 
-    [Header("Grounded Vars")] 
+    // 지면 체크 변수
+    [Header("Grounded Vars")]
     [SerializeField] private LayerMask groundLayer;
     [SerializeField] private Transform groundDetectionObj;
 
+    // 네트워크 동기화 변수
     [Networked] public TickTimer RespawnTimer { get; private set; }
     [Networked] public NetworkBool PlayerIsAlive { get; private set; }
-
     [Networked(OnChanged = nameof(OnNicknameChanged))]
     private NetworkString<_8> playerName { get; set; }
-
     [Networked] private NetworkButtons buttonsPrev { get; set; }
     [Networked] private Vector2 serverNextSpawnPoint { get; set; }
     [Networked] private NetworkBool isGrounded { get; set; }
     [Networked] private TickTimer respawnToNewPointTimer { get; set; }
 
+    // 로컬 변수
     private float horizontal;
     private Rigidbody2D rigid;
     private PlayerWeaponController playerWeaponController;
     private PlayerVisualController playerVisualController;
     private PlayerHealthController playerHealthController;
 
+    // 플레이어 입력 버튼 열거형
     public enum PlayerInputButtons
     {
         None,
@@ -40,6 +44,7 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         Shoot
     }
 
+    // 네트워크 오브젝트 생성 시 초기화
     public override void Spawned()
     {
         rigid = GetComponent<Rigidbody2D>();
@@ -51,10 +56,12 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         PlayerIsAlive = true;
     }
 
+    // 로컬 오브젝트 설정
     private void SetLocalObjects()
     {
         if (Utils.IsLocalPlayer(Object))
         {
+            // 로컬 플레이어의 카메라 설정
             cam.transform.SetParent(null);
             cam.SetActive(true);
 
@@ -63,36 +70,31 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         }
         else
         {
-            //If this is not our InputAuthority player (aka a proxy)
-            //We want to make sure to set this nrb's InterpolationDataSource to Snapshots
-            //As it will automatically set all nrb's to be predicted regardless if it's a proxy or not, as we are doing full physics prediction.
-            //And setting it back to snapshots for proxies, will also make sure that lag compensation will work properly + be more cost efficient
+            // 프록시 플레이어의 보간 설정
             GetComponent<NetworkRigidbody2D>().InterpolationDataSource = InterpolationDataSources.Snapshots;
         }
     }
 
-    // Sends RPC to the HOST (from a client)
-    //"sources" define which PEER can send the rpc
-    //The RpcTargets defines on which it is executed!
+    // 닉네임 설정 RPC (클라이언트 -> 호스트)
     [Rpc(sources: RpcSources.InputAuthority, RpcTargets.StateAuthority)]
     private void RpcSetNickName(NetworkString<_8> nickName)
     {
         playerName = nickName;
     }
 
-    //For example -
-    //if i set on spawned method a name called "banana"
-    // and then on fun i change another name which is again "banana"
+    // 닉네임 변경 시 호출되는 콜백
     private static void OnNicknameChanged(Changed<PlayerController> changed)
     {
         changed.Behaviour.SetPlayerNickname(changed.Behaviour.playerName);
     }
 
+    // 플레이어 닉네임 UI 업데이트
     private void SetPlayerNickname(NetworkString<_8> nickName)
     {
         playerNameText.text = nickName + " " + Object.InputAuthority.PlayerId;
     }
 
+    // 플레이어 사망 처리
     public void KillPlayer()
     {
         const int RESPAWN_AMOUNT = 5;
@@ -101,19 +103,16 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
             serverNextSpawnPoint = GlobalManagers.Instance.PlayerSpawnerController.GetRandomSpawnPoint();
             respawnToNewPointTimer = TickTimer.CreateFromSeconds(Runner, RESPAWN_AMOUNT - 1);
         }
-        
+
         PlayerIsAlive = false;
         rigid.simulated = false;
         playerVisualController.TriggerDieAnimation();
         RespawnTimer = TickTimer.CreateFromSeconds(Runner, RESPAWN_AMOUNT);
     }
 
-    //Happens before anything else Fusion does, network application, reconlation etc 
-    //Called at the start of the Fusion Update loop, before the Fusion simulation loop.
-    //It fires before Fusion does ANY work, every screen refresh.
+    // Fusion 업데이트 전 실행
     public void BeforeUpdate()
     {
-        //We are the local machine
         if (Utils.IsLocalPlayer(Object) && AcceptAnyInput)
         {
             const string HORIZONTAL = "Horizontal";
@@ -121,22 +120,18 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         }
     }
 
-    //FUN
+    // 네트워크 물리 업데이트
     public override void FixedUpdateNetwork()
     {
         CheckRespawnTimer();
 
-        // will return false if:
-        //the client does not have State Authority or Input Authority
-        // the requested type of input does not exist in the simulation
         if (Runner.TryGetInputForPlayer<PlayerData>(Object.InputAuthority, out var input))
         {
             if (AcceptAnyInput)
             {
+                // 이동 처리
                 rigid.velocity = new Vector2(input.HorizontalInput * moveSpeed, rigid.velocity.y);
-
                 CheckJumpInput(input);
-
                 buttonsPrev = input.NetworkButtons;
             }
             else
@@ -148,17 +143,18 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         playerVisualController.UpdateScaleTransforms(rigid.velocity);
     }
 
+    // 리스폰 타이머 체크
     private void CheckRespawnTimer()
     {
         if (PlayerIsAlive) return;
 
-        //Will only run on the server
+        // 서버에서만 실행
         if (respawnToNewPointTimer.Expired(Runner))
         {
             GetComponent<NetworkRigidbody2D>().TeleportToPosition(serverNextSpawnPoint);
             respawnToNewPointTimer = TickTimer.None;
         }
-        
+
         if (RespawnTimer.Expired(Runner))
         {
             RespawnTimer = TickTimer.None;
@@ -166,6 +162,7 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         }
     }
 
+    // 플레이어 리스폰
     private void RespawnPlayer()
     {
         PlayerIsAlive = true;
@@ -174,11 +171,13 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         playerHealthController.ResetHealthAmountToMax();
     }
 
+    // 렌더링 업데이트
     public override void Render()
     {
         playerVisualController.RendererVisuals(rigid.velocity, playerWeaponController.IsHoldingShootingKey);
     }
 
+    // 점프 입력 체크 및 처리
     private void CheckJumpInput(PlayerData input)
     {
         var transform1 = groundDetectionObj.transform;
@@ -195,12 +194,14 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         }
     }
 
+    // 네트워크 오브젝트 제거 시
     public override void Despawned(NetworkRunner runner, bool hasState)
     {
         GlobalManagers.Instance.ObjectPoolingManager.RemoveNetworkObjectFromDic(Object);
         Destroy(gameObject);
     }
 
+    // 플레이어 네트워크 입력 데이터 생성
     public PlayerData GetPlayerNetworkInput()
     {
         PlayerData data = new PlayerData();
